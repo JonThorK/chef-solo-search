@@ -28,17 +28,26 @@ if Chef::Config[:solo]
   $: << File.expand_path("vendor", File.dirname(__FILE__)) if Chef::VERSION.to_i >= 11
 
   # Ensure the treetop gem is installed and available
+  treetop_loadable = false
   begin
     require 'treetop'
+    treetop_loadable = true
   rescue LoadError
     run_context = Chef::RunContext.new(Chef::Node.new, {}, Chef::EventDispatch::Dispatcher.new)
     chef_gem = Chef::Resource::ChefGem.new("treetop", run_context)
     chef_gem.version('>= 1.4')
     chef_gem.run_action(:install)
+    #chef gem isn't run in whyrun mode
+    treetop_loadable = !Chef::Config[:why_run]
   end
 
-  require 'search/overrides'
-  require 'search/parser'
+
+  PARSER_LOADED = false
+  if treetop_loadable
+    require 'search/overrides'
+    require 'search/parser'
+    PARSER_LOADED = true
+  end
 
   module Search; class Helper; end; end
 
@@ -47,14 +56,14 @@ if Chef::Config[:solo]
   if Chef::VERSION.to_i >= 11
     module Chef::DSL::DataQuery
       def self.included(base)
-        base.send(:include, Search::Overrides)
+        base.send(:include, Search::Overrides) if PARSER_LOADED
       end
     end
     Search::Helper.send(:include, Chef::DSL::DataQuery)
   else
     module Chef::Mixin::Language
       def self.included(base)
-        base.send(:include, Search::Overrides)
+        base.send(:include, Search::Overrides) if PARSER_LOADED
       end
     end
     Search::Helper.send(:include, Chef::Mixin::Language)
@@ -66,7 +75,12 @@ if Chef::Config[:solo]
         def initialize(*args)
         end
         def search(*args, &block)
-          ::Search::Helper.new.search(*args, &block)
+          if PARSER_LOADED
+            ::Search::Helper.new.search(*args, &block)
+          else
+            Chef::Log.warn("In whyrun mode, so can't perform search unless you manually install treetop in chef environment.")
+            []
+          end
         end
       end
     end
